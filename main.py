@@ -1,5 +1,8 @@
 import re
 import pdfplumber
+from typing import List
+import os
+
 
 path = (
     "/home/sdanilov/Build/PDF-Scraper-for-Bank-of-America-Statements/"
@@ -16,28 +19,48 @@ class Transaction:
 
     def __str__(self):
         return (
-            f"{self.date}, "
-            f"{self.description}, "
-            f"{self.amount}"
+            self.date
+            + ", "
+            + self.description
+            + ","
+            + self.amount
         )
 
 
 class Section:
-    def __init__(self, name, transactions):
-        self.name = name
-        self.transactions = transactions
+    def __init__(self, name: str, transactions: List[Transaction]):
+        self.name: str = name
+        self.transactions: List[Transaction] = transactions
 
     def __str__(self):
-        return f"{self.name}\n{[str(t) for t in self.transactions]}"
+        transaction_strings = [str(t) for t in self.transactions]
+        return f"{self.name}\n" + "\n".join(transaction_strings)
 
 
-def extract_with_pdf_plumber(pdf_path):
-    sections = []
-    current_section_transactions = []
-    current_section_name = None
+class Statement:
+    def __init__(self, date: str, sections: List[Section]):
+        self.date: str = date
+        self.sections: List[Section] = sections
+
+    def __str__(self):
+        sections = [str(t) for t in self.sections]
+        return f"{self.date}\n" + "\n".join(sections)
+
+
+def extract_with_pdf_plumber(pdf_path: str) -> Statement:
+    sections: List[Section] = []
+    current_section_transactions: List[Transaction] = []
+    current_section_name: str | None = None
+    filename = os.path.basename(pdf_path)
+    date_match_filename = re.search(r"eStmt_(\d{4}-\d{2}-\d{2})", filename)
+    if date_match_filename:
+        statement_date = date_match_filename.group(1)
+    else:
+        statement_date = "Unknown Date"
+
     with pdfplumber.open(pdf_path) as pdf:
         is_in_date_range = False
-        previous_line = None
+        previous_line: str | None = None
         for page in pdf.pages:
             text = page.extract_text()
             for line in text.splitlines():
@@ -74,12 +97,9 @@ def extract_with_pdf_plumber(pdf_path):
                         current_section_name = previous_line
                         is_in_date_range = True
                 previous_line = line
-    return sections
+    return Statement(statement_date, sections)
 
 
 if __name__ == "__main__":
-    sections = extract_with_pdf_plumber(path)
-    for section in sections:
-        print(section.name)
-        for transaction in section.transactions:
-            print(f"\t{transaction}")
+    statement = extract_with_pdf_plumber(path)
+    print(statement)
