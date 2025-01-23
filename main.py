@@ -1,13 +1,11 @@
+import csv
 import re
 import pdfplumber
 from typing import List
 import os
 import sys
+import argparse
 
-path = (
-    "/home/sdanilov/Build/PDF-Scraper-for-Bank-of-America-Statements/"
-    "data/checking-3675/eStmt_2017-07-21.pdf"
-)
 date_pattern = re.compile(r"\d{2}/\d{2}/\d{2}")
 
 
@@ -22,9 +20,11 @@ class Transaction:
 
 
 class Section:
-    def __init__(self, name: str, transactions: List[Transaction]):
+    def __init__(self, name: str, transactions: List[Transaction],
+                 account=None):
         self.name: str = name
         self.transactions: List[Transaction] = transactions
+        self.account = account
 
     def __str__(self):
         transaction_strings = [str(t) for t in self.transactions]
@@ -41,6 +41,46 @@ class Statement:
         return f"{self.date}\n" + "\n".join(sections)
 
 
+def parse_combibed_account_number(line: str) -> str | None:
+    """
+    Parses the account number from a line of text.
+
+    This account number exists only in combined statements with
+    several account numbers
+
+    Args:
+        line: The line of text to parse.
+
+    Returns:
+        The extracted account number, or None if not found.
+    """
+    account_match = re.search(
+        r"Account number:\s*([\d\s]+)", line)
+    if account_match:
+        return account_match.group(1).strip()
+    return None
+
+
+def parse_single_global_account_number(line: str) -> str | None:
+    """
+    Parses the single global account number from a line of text.
+
+    This account number exists in every statement and one per statement
+    Example line:
+    ! JOHN DOW ! Account # 1234 1234 1234 ! September 21, 2018
+
+    Args:
+        line: The line of text to parse.
+
+    Returns:
+        The extracted account number, or None if not found.
+    """
+    account_match = re.search(r"! Account #\s*([\d\s]+)\s*!", line)
+    if account_match:
+        return account_match.group(1).strip()
+    return None
+
+
 def extract_with_pdf_plumber(pdf_path: str) -> Statement:
     sections: List[Section] = []
     current_section_transactions: List[Transaction] = []
@@ -52,12 +92,26 @@ def extract_with_pdf_plumber(pdf_path: str) -> Statement:
     else:
         statement_date = "Unknown Date"
 
+    account_number = None  # Initialize account_number
+
     with pdfplumber.open(pdf_path) as pdf:
         is_in_date_range = False
         previous_line: str | None = None
         for page in pdf.pages:
             text = page.extract_text()
             for line in text.splitlines():
+                # global account number is single per statement and
+                # always must exist
+                global_account_number = parse_single_global_account_number(
+                    line)
+                if global_account_number:
+                    account_number = global_account_number
+                # In case of combibed statement override global account number
+                # with number from combined statement
+                if line.startswith("Account number:"):
+                    parsed_account_number = parse_combibed_account_number(line)
+                    if parsed_account_number:
+                        account_number = parsed_account_number
                 if is_in_date_range:
                     if line.startswith("Total"):
                         is_in_date_range = False
@@ -65,7 +119,8 @@ def extract_with_pdf_plumber(pdf_path: str) -> Statement:
                             sections.append(
                                 Section(
                                     current_section_name,
-                                    current_section_transactions
+                                    current_section_transactions,
+                                    account_number
                                 )
                             )
                             current_section_transactions = []
@@ -118,6 +173,59 @@ def extract_with_pdf_plumber(pdf_path: str) -> Statement:
     return Statement(statement_date, sections)
 
 
+class FileWriterClass:
+    def __init__(self, directory):
+        self.directory = directory
+
+    def append_statement(self, statement: Statement):
+        for section in statement.sections:
+            account_number_prefix = ""
+            if not section.account:
+                print(
+                    "Parse error: Failed to get account number for "
+                    f"statement {statement.date}")
+                sys.exit(1)
+            account_number_prefix = f"{section.account[-4:]}_"
+            file_path = os.path.join(
+                self.directory, f"{account_number_prefix}{section.name}.csv")
+            file_exists = os.path.exists(file_path)
+            with open(file_path, 'a') as csvfile:
+                fieldnames = ['date', 'description', 'amount', 'account']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if not file_exists:
+                    writer.writeheader()
+                for transaction in section.transactions:
+                    writer.writerow({
+                        'date': transaction.date,
+                        'description': transaction.description,
+                        'amount': transaction.amount
+                    })
+
+
 if __name__ == "__main__":
-    statement = extract_with_pdf_plumber(path)
-    print(statement)
+    parser = argparse.ArgumentParser(
+        description="Process Bank of America statements."
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--dir", help="Directory containing statement PDFs to process"
+    )
+    group.add_argument(
+        "--statement", help="Path to a single statement PDF to process"
+    )
+    args = parser.parse_args()
+
+    file_writer = FileWriterClass(
+        "/home/sdanilov/Build/PDF-Scraper-for-Bank-of-America-Statements/"
+        "data/out"
+    )
+
+    if args.statement:
+        statement = extract_with_pdf_plumber(args.statement)
+        file_writer.append_statement(statement)
+    elif args.dir:
+        for filename in os.listdir(args.dir):
+            if filename.endswith(".pdf"):
+                pdf_path = os.path.join(args.dir, filename)
+                statement = extract_with_pdf_plumber(pdf_path)
+                file_writer.append_statement(statement)
