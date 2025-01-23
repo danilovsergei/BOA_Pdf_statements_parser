@@ -2,11 +2,11 @@ import re
 import pdfplumber
 from typing import List
 import os
-
+import sys
 
 path = (
     "/home/sdanilov/Build/PDF-Scraper-for-Bank-of-America-Statements/"
-    "data/checking-3675/eStmt_2019-08-22.pdf"
+    "data/checking-3675/eStmt_2017-07-21.pdf"
 )
 date_pattern = re.compile(r"\d{2}/\d{2}/\d{2}")
 
@@ -18,13 +18,7 @@ class Transaction:
         self.amount = amount
 
     def __str__(self):
-        return (
-            self.date
-            + ", "
-            + self.description
-            + ","
-            + self.amount
-        )
+        return self.date + ", " + self.description + "," + self.amount
 
 
 class Section:
@@ -69,34 +63,58 @@ def extract_with_pdf_plumber(pdf_path: str) -> Statement:
                         is_in_date_range = False
                         if current_section_name:
                             sections.append(
-                                Section(current_section_name,
-                                        current_section_transactions)
+                                Section(
+                                    current_section_name,
+                                    current_section_transactions
+                                )
                             )
                             current_section_transactions = []
                             current_section_name = None
                         continue
-                    date_match = date_pattern.search(line)
+                    date_match = date_pattern.search(line)  # Moved line
                     if date_match:
-                        parts = line.split()  # Simple split
+                        parts = line.split()
                         date = parts[0]
                         amount = parts[-1]
                         description_parts = parts[1:-1]
                         description = " ".join(description_parts)
-                        transaction = Transaction(date,
-                                                  description,
-                                                  amount)
+                        transaction = Transaction(date, description, amount)
                         current_section_transactions.append(transaction)
+                    elif (
+                            is_in_date_range
+                            and not date_match):
+                        # line is continuation of the prev date line
+                        # 07/24/19 compant payroll $100
+                        # CO ID:CXXXXXXXXX WEB
+                        # Concatenate such lines
+                        if len(current_section_transactions) == 0:
+                            print(
+                                "Can not create multiline transaction for "
+                                "empty transaction list")
+                            sys.exit(1)
+                        last_transaction = current_section_transactions[-1]
+                        last_transaction.description += " " + line
+                        continue
                 else:
-                    if line.startswith("Date") and line.endswith("Amount"):
-                        if previous_line and previous_line.endswith(
-                            " - continued"
-                        ):
+                    new_section_started = line.startswith(
+                        "Date") and line.endswith("Amount")
+                    if new_section_started:
+                        if previous_line and \
+                                previous_line.endswith(" - continued"):
                             previous_line = previous_line.replace(
-                                " - continued", ""
-                            )
+                                " - continued", "")
                         current_section_name = previous_line
                         is_in_date_range = True
-                previous_line = line
+                date_match = date_pattern.search(line)
+                if date_match:
+                    previous_line = line
+                elif is_in_date_range:
+                    # Keep the previous_line as is if in date range
+                    # but no date_match
+                    pass
+                else:
+                    # Update previous_line normally when not in date range
+                    previous_line = line
     return Statement(statement_date, sections)
 
 
