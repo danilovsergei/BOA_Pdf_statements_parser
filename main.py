@@ -267,12 +267,14 @@ if __name__ == "__main__":
     group.add_argument(
         "--statement", help="Path to a single statement PDF to process"
     )
+    parser.add_argument(
+        "--out_dir", help="Output dir to save generated cvs files",
+        required=True
+    )
+
     args = parser.parse_args()
 
-    file_writer = FileWriterClass(
-        "/home/sdanilov/Build/PDF-Scraper-for-Bank-of-America-Statements/"
-        "data/out"
-    )
+    file_writer = FileWriterClass(args.out_dir)
     if args.statement:
         statement = StatementParser(args.statement).extract_with_pdf_plumber()
         file_writer.append_statement(statement)
