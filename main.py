@@ -88,6 +88,9 @@ class StatementParser:
         self.current_section_transactions: List[Transaction] = []
         self.section_started = False
 
+        self.account_number = None
+        self.combibed_statement = False
+
     def extract_with_pdf_plumber(self) -> Statement:
         sections: List[Section] = []
 
@@ -98,27 +101,12 @@ class StatementParser:
             statement_date = date_match_filename.group(1)
         else:
             statement_date = "Unknown Date"
-
-        account_number = None  # Initialize account_number
-
         with pdfplumber.open(self.pdf_path) as pdf:
             previous_line: str | None = None
             for page in pdf.pages:
                 text = page.extract_text()
                 for line in text.splitlines():
-                    # global account number is single per statement and
-                    # always must exist
-                    global_account_number = parse_single_global_account_number(
-                        line)
-                    if global_account_number:
-                        account_number = global_account_number
-                    # In case of combibed statement override global account
-                    # number with number from combined statement
-                    if line.startswith("Account number:"):
-                        parsed_account_number = parse_combibed_account_number(
-                            line)
-                        if parsed_account_number:
-                            account_number = parsed_account_number
+                    self.set_account_number(line)
                     if self.section_started:
                         if line.startswith("Total"):
                             self.section_started = False
@@ -127,7 +115,7 @@ class StatementParser:
                                     Section(
                                         current_section_name,
                                         self.current_section_transactions,
-                                        account_number
+                                        self.account_number
                                     )
                                 )
                                 self.current_section_transactions = []
@@ -163,6 +151,23 @@ class StatementParser:
                         # Update previous_line normally when not in date range
                         previous_line = line
         return Statement(statement_date, sections)
+
+    def set_account_number(self, line: str):
+        if not self.combibed_statement:
+            # global account number is single per statement and
+            # always must exist
+            global_account_number = parse_single_global_account_number(
+                line)
+            if global_account_number:
+                self.account_number = global_account_number
+        # In case of combibed statement override global account
+        # number with number from combined statement
+        if line.startswith("Account number:"):
+            parsed_account_number = parse_combibed_account_number(
+                line)
+            if parsed_account_number:
+                self.account_number = parsed_account_number
+                self.combibed_statement = True
 
     def parse_single_transaction(self, line: str):
         date_match = date_pattern.search(line)
@@ -244,7 +249,7 @@ class FileWriterClass:
                 self.directory, f"{account_number_prefix}{section.name}.csv")
             file_exists = os.path.exists(file_path)
             with open(file_path, 'a') as csvfile:
-                fieldnames = ['date', 'description', 'amount', 'account']
+                fieldnames = ['date', 'description', 'amount', 'statement']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 if not file_exists:
                     writer.writeheader()
@@ -252,7 +257,8 @@ class FileWriterClass:
                     writer.writerow({
                         'date': transaction.date,
                         'description': transaction.description,
-                        'amount': transaction.amount
+                        'amount': transaction.amount,
+                        'statement': statement.date
                     })
 
 
