@@ -83,6 +83,7 @@ def parse_single_global_account_number(line: str) -> str | None:
 
 class StatementParser:
     def __init__(self, pdf_path: str):
+        self.pagination_pattern = r"^Page \d+ of \d+$"
         self.pdf_path = pdf_path
         self.is_section_has_substrings = False
         self.current_section_transactions: List[Transaction] = []
@@ -128,9 +129,7 @@ class StatementParser:
                             self.parse_single_transaction(subline)
                         continue
                     else:
-                        new_section_started = line.startswith(
-                            "Date") and line.endswith("Amount")
-                        if new_section_started:
+                        if self.is_section_header(line):
                             # handle case when table continues on another page
                             if previous_line and \
                                     previous_line.endswith(" - continued"):
@@ -151,6 +150,9 @@ class StatementParser:
                         # Update previous_line normally when not in date range
                         previous_line = line
         return Statement(statement_date, sections)
+
+    def is_section_header(self, line: str) -> bool:
+        return line.startswith("Date") and line.endswith("Amount")
 
     def set_account_number(self, line: str):
         if not self.combibed_statement:
@@ -192,6 +194,20 @@ class StatementParser:
                     "Can not create multiline transaction for "
                     "empty transaction list")
                 sys.exit(1)
+            # ignore continue lines
+            if line.startswith("continued on the next page"):
+                return
+            # ignore pagination lines
+            if bool(re.match(self.pagination_pattern, line)):
+                return
+            # ignore footer line
+            if parse_single_global_account_number(line):
+                return
+            # ignore continuation section names
+            if line.endswith("- continued"):
+                return
+            if self.is_section_header(line):
+                return
             last_transaction = self.current_section_transactions[-1]
             last_transaction.description += " " + line
 
